@@ -1,0 +1,78 @@
+# API Gateway Configuration
+# Handles 50K+ requests/minute across 200+ microservices
+
+_format_version: "3.0"
+services:
+  - name: policy-service
+    url: http://policy-service.internal:8080
+    routes:
+      - name: policy-routes
+        paths:
+          - /v1/policies
+        methods: [GET, POST, PUT]
+        strip_path: false
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 100
+          policy: redis
+      - name: jwt
+        config:
+          uri_param_names: []
+          cookie_names: []
+          key_claim_name: iss
+          secret_is_base64: false
+          claims_to_verify:
+            - exp
+
+  - name: claims-service
+    url: http://claims-service.internal:8080
+    routes:
+      - name: claims-routes
+        paths:
+          - /v1/claims
+        methods: [GET, POST]
+    plugins:
+      - name: request-transformer
+        config:
+          add:
+            headers:
+              - X-Request-ID:$(uuid)
+      - name: file-log
+        config:
+          path: /var/log/kong/claims-access.log
+
+  - name: pricing-engine
+    url: http://pricing-engine.internal:8080
+    routes:
+      - name: pricing-routes
+        paths:
+          - /v1/quotes
+    plugins:
+      - name: caching
+        config:
+          ttl: 300
+          strategy: memory
+
+consumers:
+  - username: mobile-app-ios
+    jwt:
+      - algorithm: RS256
+        key: "mobile-ios-key"
+        rsa_public_key: ${{ env.IOS_JWT_PUBLIC_KEY }}
+  
+  - username: mobile-app-android
+    jwt:
+      - algorithm: RS256
+        key: "mobile-android-key"
+        rsa_public_key: ${{ env.ANDROID_JWT_PUBLIC_KEY }}
+
+plugins:
+  - name: prometheus
+    config:
+      per_consumer: true
+  - name: correlation-id
+    config:
+      header_name: X-Request-ID
+      generator: uuid
+      echo_downstream: true
